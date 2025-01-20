@@ -2,6 +2,7 @@
 using autoapprove_dashboard2.Interfaces;
 using autoapprove_dashboard2.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;  
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,11 +14,13 @@ namespace autoapprove_dashboard2.Services
     public class RequestService : IRequestService
     {
         private readonly ApplicationDbContext _context;
+        private readonly IServiceScopeFactory _scopeFactory; 
         private Timer _timer;
 
-        public RequestService(ApplicationDbContext applicationDbContext)
+        public RequestService(ApplicationDbContext applicationDbContext, IServiceScopeFactory scopeFactory)
         {
             _context = applicationDbContext;
+            _scopeFactory = scopeFactory;
             StartAutoApproveRejectTimer();
         }
 
@@ -28,19 +31,25 @@ namespace autoapprove_dashboard2.Services
 
         private async Task AutoApproveRejectRequests()
         {
-            var pendingRequests = await _context.Requests.Where(r => r.Status == "Pending").ToListAsync();
-
-            foreach (var request in pendingRequests)
+            // Ensure DbContext is used within the proper scope
+            using (var scope = _scopeFactory.CreateScope())
             {
-                if (ShouldApprove(request))
+                var scopedContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                var pendingRequests = await scopedContext.Requests.Where(r => r.Status == "Pending").ToListAsync();
+
+                foreach (var request in pendingRequests)
                 {
-                    request.Status = "Approved";
-                    await UpdateRequestAsync(request);
-                }
-                else
-                {
-                    request.Status = "Rejected";
-                    await UpdateRequestAsync(request);
+                    if (ShouldApprove(request))
+                    {
+                        request.Status = "Approved";
+                        await UpdateRequestAsync(request, scopedContext);
+                    }
+                    else
+                    {
+                        request.Status = "Rejected";
+                        await UpdateRequestAsync(request, scopedContext);
+                    }
                 }
             }
         }
@@ -66,10 +75,10 @@ namespace autoapprove_dashboard2.Services
             await _context.SaveChangesAsync();
         }
 
-        public async Task UpdateRequestAsync(Request request)
+        public async Task UpdateRequestAsync(Request request, ApplicationDbContext scopedContext)
         {
-            _context.Requests.Update(request);
-            await _context.SaveChangesAsync();
+            scopedContext.Requests.Update(request);
+            await scopedContext.SaveChangesAsync();
         }
 
         public async Task DeleteRequestAsync(int id)
@@ -90,7 +99,7 @@ namespace autoapprove_dashboard2.Services
             {
                 request.Status = "Approved";
                 request.IsChecked = true;
-                await UpdateRequestAsync(request);
+                await UpdateRequestAsync(request, _context);
             }
         }
 
@@ -101,8 +110,14 @@ namespace autoapprove_dashboard2.Services
             foreach (var request in pendingRequests)
             {
                 request.Status = "Rejected";
-                await UpdateRequestAsync(request);
+                await UpdateRequestAsync(request, _context);
             }
+        }
+
+        Task IRequestService.UpdateRequestAsync(Request request)
+        {
+            throw new NotImplementedException();
         }
     }
 }
+
